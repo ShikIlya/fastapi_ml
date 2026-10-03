@@ -1,6 +1,6 @@
 from fastapi import FastAPI
 from schemas import FeatureVectorChurn, DatasetRowChurn
-from dataset import read_churn_dataset, get_amount_rows
+from dataset import read_churn_dataset, get_amount_rows, split_info_dataset
 
 app = FastAPI()
 
@@ -29,4 +29,10 @@ def info():
         'features': features,
         'distribution': distribution
     }
+
+@app.get('/dataset/split-info')
+def split_info():
+    result = split_info_dataset()
+
+    return result
 
