@@ -1,10 +1,11 @@
 from fastapi import FastAPI, HTTPException
 from contextlib import asynccontextmanager
-from schemas import FeatureVectorChurn, DatasetRowChurn
+from schemas import FeatureVectorChurn, DatasetRowChurn, PredictionResponseChurn
 from dataset import read_churn_dataset, get_amount_rows, split_info_dataset, train_churn_model, split_churn_dataset
 from model_storage import save_churn_model, load_churn_model
 from sklearn.metrics import accuracy_score, f1_score
 from datetime import datetime
+import pandas as pd
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -18,8 +19,34 @@ async def lifespan(app: FastAPI):
 app = FastAPI(lifespan=lifespan)
 
 @app.post('/predict')
-def predict(payload: FeatureVectorChurn) -> FeatureVectorChurn:
-    return payload
+def predict(payload: list[FeatureVectorChurn]) -> list[PredictionResponseChurn]:
+    X = pd.DataFrame([client.model_dump() for client in payload])
+
+    model_data = app.state.model_data
+
+    if model_data is None:
+        raise HTTPException(
+            status_code=503,
+            detail="Модель churn недоступна. Сначала обучите её через POST /model/train.",
+        )
+
+    pipeline = model_data['pipeline']
+
+    predictions = pipeline.predict(X)
+    probabilities = pipeline.predict_proba(X)
+
+    results = []
+
+    for prediction, probability in zip(predictions, probabilities):
+        results.append(
+            {
+                'churn': prediction,
+                'probability_stay': probability[0],
+                'probability_churn': probability[1]
+            }
+        )
+
+    return results
 
 @app.get('/dataset/preview')
 def preview(n: int = 5) -> list[DatasetRowChurn]:
