@@ -4,6 +4,8 @@ from sklearn.linear_model import LogisticRegression
 from sklearn.preprocessing import StandardScaler, OneHotEncoder
 from sklearn.compose import ColumnTransformer
 from sklearn.pipeline import Pipeline
+from sklearn.ensemble import RandomForestClassifier
+from schemas import TrainingConfigChurn
 
 NUMERIC_FEATURE_COLUMNS = [
     "monthly_fee",
@@ -69,7 +71,7 @@ def split_info_dataset(df: pd.DataFrame) -> dict:
         },
     }
 
-def train_churn_model(X_train, y_train):
+def train_churn_model(X_train, y_train, config: TrainingConfigChurn):
     scaler = StandardScaler()
     one_hot_encoder = OneHotEncoder(handle_unknown='ignore')
 
@@ -80,7 +82,10 @@ def train_churn_model(X_train, y_train):
         ]
     )
 
-    classifier = LogisticRegression()
+    classifier = get_classifier(
+        config.model_type,
+        config.hyperparameters,
+    )
 
     pipeline = Pipeline(
         steps=[
@@ -92,3 +97,10 @@ def train_churn_model(X_train, y_train):
     pipeline.fit(X_train, y_train)
 
     return pipeline
+
+def get_classifier(model_type: str, hyperparameters: dict):
+    if model_type == 'logreg':
+        return LogisticRegression(**hyperparameters)
+
+    if model_type == 'random_forest':
+        return RandomForestClassifier(**hyperparameters)

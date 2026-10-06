@@ -1,4 +1,5 @@
 from pydantic import BaseModel
+from typing import Any, Literal
 
 class FeatureVectorChurn(BaseModel):
     monthly_fee: float
@@ -18,3 +19,7 @@ class PredictionResponseChurn(BaseModel):
     churn: int
     probability_stay: float
     probability_churn: float
+
+class TrainingConfigChurn(BaseModel):
+    model_type: Literal["logreg", "random_forest"]
+    hyperparameters: dict[str, Any]

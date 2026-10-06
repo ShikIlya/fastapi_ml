@@ -1,6 +1,6 @@
 from fastapi import FastAPI, HTTPException
 from contextlib import asynccontextmanager
-from schemas import FeatureVectorChurn, DatasetRowChurn, PredictionResponseChurn
+from schemas import FeatureVectorChurn, DatasetRowChurn, PredictionResponseChurn, TrainingConfigChurn
 from dataset import read_churn_dataset, get_amount_rows, split_info_dataset, train_churn_model, split_churn_dataset
 from model_storage import save_churn_model, load_churn_model
 from sklearn.metrics import accuracy_score, f1_score
@@ -77,7 +77,7 @@ def split_info():
     return split_info_dataset(df)
 
 @app.post('/model/train')
-def model_train():
+def model_train(payload: TrainingConfigChurn):
     try:
         df = read_churn_dataset()
     except FileNotFoundError as exc:
@@ -93,7 +93,7 @@ def model_train():
 
     X_train, X_test, y_train, y_test = split_churn_dataset(df)
 
-    pipeline = train_churn_model(X_train, y_train)
+    pipeline = train_churn_model(X_train, y_train, payload)
 
     y_pred = pipeline.predict(X_test)
 
@@ -106,7 +106,9 @@ def model_train():
         'metrics': {
             'accuracy': accuracy,
             'f1': f1,
-        }
+        },
+        'model_type': payload.model_type,
+        'hyperparameters': payload.hyperparameters
     }
 
     save_churn_model(model_data)
@@ -131,5 +133,7 @@ def get_model_status():
     return {
         'trained': True,
         'trained_at': model_data['trained_at'],
-        'metrics': model_data['metrics']
+        'metrics': model_data['metrics'],
+        'model_type': model_data['model_type'],
+        'hyperparameters': model_data['hyperparameters']
     }
