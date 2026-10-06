@@ -137,3 +137,46 @@ def get_model_status():
         'model_type': model_data['model_type'],
         'hyperparameters': model_data['hyperparameters']
     }
+
+@app.get('/model/schema')
+def get_model_schema():
+    return {
+        "features": [
+            {
+                "name": "monthly_fee",
+                "type": "float"
+            },
+            {
+                "name": "usage_hours",
+                "type": "float"
+            },
+            {
+                "name": "support_requests",
+                "type": "int"
+            },
+            {
+                "name": "account_age_months",
+                "type": "int"
+            },
+            {
+                "name": "failed_payments",
+                "type": "int"
+            },
+            {
+                "name": "region",
+                "type": "string"
+            },
+            {
+                "name": "device_type",
+                "type": "string"
+            },
+            {
+                "name": "payment_method",
+                "type": "string"
+            },
+            {
+                "name": "autopay_enabled",
+                "type": "int"
+            }
+        ]
+    }
