@@ -1,11 +1,18 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import JSONResponse
+from fastapi.exceptions import RequestValidationError
+from starlette.exceptions import HTTPException as StarletteHTTPException
 from contextlib import asynccontextmanager
-from schemas import FeatureVectorChurn, DatasetRowChurn, PredictionResponseChurn, TrainingConfigChurn
+from schemas import FeatureVectorChurn, DatasetRowChurn, PredictionResponseChurn, TrainingConfigChurn, ErrorResponse
 from dataset import read_churn_dataset, get_amount_rows, split_info_dataset, train_churn_model, split_churn_dataset
 from model_storage import save_churn_model, load_churn_model
 from sklearn.metrics import accuracy_score, f1_score
+from sklearn.exceptions import NotFittedError
 from datetime import datetime
 import pandas as pd
+import logging
+
+logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -18,7 +25,236 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(lifespan=lifespan)
 
-@app.post('/predict')
+PREDICT_ERROR_RESPONSES = {
+    422: {
+        "model": ErrorResponse,
+        "description": "Ошибка входных данных или выполнения предсказания.",
+        "content": {
+            "application/json": {
+                "examples": {
+                    "missing_feature": {
+                        "summary": "Отсутствует обязательный признак",
+                        "value": {
+                            "code": 422,
+                            "message": "Некорректные данные запроса.",
+                            "details": {
+                                "errors": [
+                                    {
+                                        "location": ["body", 0, "monthly_fee"],
+                                        "message": "Field required",
+                                        "type": "missing",
+                                    }
+                                ]
+                            },
+                        },
+                    },
+                    "invalid_type": {
+                        "summary": "Неверный тип значения",
+                        "value": {
+                            "code": 422,
+                            "message": "Некорректные данные запроса.",
+                            "details": {
+                                "errors": [
+                                    {
+                                        "location": ["body", 0, "monthly_fee"],
+                                        "message": (
+                                            "Input should be a valid number, "
+                                            "unable to parse string as a number"
+                                        ),
+                                        "type": "float_parsing",
+                                    }
+                                ]
+                            },
+                        },
+                    },
+                    "prediction_error": {
+                        "summary": "Ошибка при вызове модели",
+                        "value": {
+                            "code": 422,
+                            "message": (
+                                "Не удалось выполнить предсказание. "
+                                "Проверьте входные данные."
+                            ),
+                            "details": None,
+                        },
+                    },
+                }
+            }
+        },
+    },
+    503: {
+        "model": ErrorResponse,
+        "description": "Модель отсутствует или не обучена.",
+        "content": {
+            "application/json": {
+                "example": {
+                    "code": 503,
+                    "message": (
+                        "Модель churn недоступна. "
+                        "Сначала обучите её через POST /model/train."
+                    ),
+                    "details": None,
+                }
+            }
+        },
+    },
+    500: {
+        "model": ErrorResponse,
+        "description": "Непредвиденная внутренняя ошибка.",
+        "content": {
+            "application/json": {
+                "example": {
+                    "code": 500,
+                    "message": (
+                        "Внутренняя ошибка сервиса. "
+                        "Попробуйте повторить запрос позже."
+                    ),
+                    "details": None,
+                }
+            }
+        },
+    },
+}
+
+TRAIN_ERROR_RESPONSES = {
+    422: {
+        "model": ErrorResponse,
+        "description": "Ошибка конфигурации обучения или данных.",
+        "content": {
+            "application/json": {
+                "examples": {
+                    "invalid_model_type": {
+                        "summary": "Неподдерживаемый тип модели",
+                        "value": {
+                            "code": 422,
+                            "message": "Некорректные данные запроса.",
+                            "details": {
+                                "errors": [
+                                    {
+                                        "location": ["body", "model_type"],
+                                        "message": (
+                                            "Input should be 'logreg' "
+                                            "or 'random_forest'"
+                                        ),
+                                        "type": "literal_error",
+                                    }
+                                ]
+                            },
+                        },
+                    },
+                    "training_error": {
+                        "summary": "Ошибка гиперпараметров или обучения",
+                        "value": {
+                            "code": 422,
+                            "message": (
+                                "Не удалось обучить модель. "
+                                "Проверьте гиперпараметры и соответствие "
+                                "данных требованиям модели."
+                            ),
+                            "details": None,
+                        },
+                    },
+                }
+            }
+        },
+    },
+    503: {
+        "model": ErrorResponse,
+        "description": "Датасет отсутствует или пуст.",
+        "content": {
+            "application/json": {
+                "examples": {
+                    "empty_dataset": {
+                        "summary": "В CSV нет строк данных",
+                        "value": {
+                            "code": 503,
+                            "message": "Датасет не содержит строк данных.",
+                            "details": None,
+                        },
+                    },
+                    "missing_dataset": {
+                        "summary": "CSV-файл не найден",
+                        "value": {
+                            "code": 503,
+                            "message": "Файл churn_dataset.csv не найден.",
+                            "details": None,
+                        },
+                    },
+                }
+            }
+        },
+    },
+    500: PREDICT_ERROR_RESPONSES[500],
+}
+
+@app.exception_handler(StarletteHTTPException)
+async def http_exception_handler(
+    request: Request,
+    exc: StarletteHTTPException,
+):
+    error = ErrorResponse(
+        code=exc.status_code,
+        message=str(exc.detail),
+        details=None,
+    )
+
+    return JSONResponse(
+        status_code=exc.status_code,
+        content=error.model_dump(mode="json"),
+        headers=exc.headers,
+    )
+
+@app.exception_handler(Exception)
+async def unexpected_exception_handler(
+    request: Request,
+    exc: Exception,
+):
+    logger.error(
+        "Необработанная ошибка: %s %s",
+        request.method,
+        request.url.path,
+        exc_info=(type(exc), exc, exc.__traceback__),
+    )
+
+    error = ErrorResponse(
+        code=500,
+        message="Внутренняя ошибка сервиса. Попробуйте повторить запрос позже.",
+        details=None,
+    )
+
+    return JSONResponse(
+        status_code=500,
+        content=error.model_dump(mode="json"),
+    )
+
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(
+    request: Request,
+    exc: RequestValidationError,
+):
+    errors = []
+
+    for item in exc.errors():
+        errors.append(
+            {
+                "location": list(item["loc"]),
+                "message": item["msg"],
+                "type": item["type"],
+            }
+        )
+
+    error = ErrorResponse(
+        code=422,
+        message="Некорректные данные запроса.",
+        details={"errors": errors},
+    )
+
+    return JSONResponse(
+        status_code=422,
+        content=error.model_dump(mode="json"),
+    )
+
+@app.post('/predict', responses=PREDICT_ERROR_RESPONSES)
 def predict(payload: list[FeatureVectorChurn]) -> list[PredictionResponseChurn]:
     X = pd.DataFrame([client.model_dump() for client in payload])
 
@@ -32,8 +268,19 @@ def predict(payload: list[FeatureVectorChurn]) -> list[PredictionResponseChurn]:
 
     pipeline = model_data['pipeline']
 
-    predictions = pipeline.predict(X)
-    probabilities = pipeline.predict_proba(X)
+    try:
+        predictions = pipeline.predict(X)
+        probabilities = pipeline.predict_proba(X)
+    except NotFittedError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail="Модель недоступна для предсказания. Необходимо обучить её.",
+        ) from exc
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail="Не удалось выполнить предсказание. Проверьте входные данные.",
+        ) from exc
 
     results = []
 
@@ -76,7 +323,7 @@ def split_info():
 
     return split_info_dataset(df)
 
-@app.post('/model/train')
+@app.post('/model/train', responses=TRAIN_ERROR_RESPONSES)
 def model_train(payload: TrainingConfigChurn):
     try:
         df = read_churn_dataset()
@@ -93,7 +340,16 @@ def model_train(payload: TrainingConfigChurn):
 
     X_train, X_test, y_train, y_test = split_churn_dataset(df)
 
-    pipeline = train_churn_model(X_train, y_train, payload)
+    try:
+        pipeline = train_churn_model(X_train, y_train, payload)
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "Не удалось обучить модель. Проверьте гиперпараметры "
+                "и соответствие данных требованиям модели."
+            ),
+        ) from exc
 
     y_pred = pipeline.predict(X_test)
 
