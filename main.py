@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Request, Query
 from fastapi.responses import JSONResponse
 from fastapi.exceptions import RequestValidationError
 from starlette.exceptions import HTTPException as StarletteHTTPException
@@ -8,9 +8,11 @@ from dataset import read_churn_dataset, get_amount_rows, split_info_dataset, tra
 from model_storage import save_churn_model, load_churn_model
 from sklearn.metrics import accuracy_score, f1_score
 from sklearn.exceptions import NotFittedError
-from datetime import datetime
+from datetime import datetime, timezone
 import pandas as pd
 import logging
+from training_history import save_training_record, load_training_history
+from typing import Literal
 
 logger = logging.getLogger(__name__)
 
@@ -356,9 +358,11 @@ def model_train(payload: TrainingConfigChurn):
     accuracy = accuracy_score(y_test, y_pred)
     f1 = f1_score(y_test, y_pred)
 
+    trained_at = int(datetime.now(timezone.utc).timestamp())
+
     model_data = {
         'pipeline': pipeline,
-        'trained_at': datetime.now(),
+        'trained_at': trained_at,
         'metrics': {
             'accuracy': accuracy,
             'f1': f1,
@@ -369,6 +373,18 @@ def model_train(payload: TrainingConfigChurn):
 
     save_churn_model(model_data)
     app.state.model_data = model_data
+
+    record = {
+        'timestamp': trained_at,
+        'model_type': payload.model_type,
+        'hyperparameters': payload.hyperparameters,
+        'metrics': {
+            'accuracy': accuracy,
+            'f1': f1,
+        },
+    }
+
+    save_training_record(record)
 
     return {
         'accuracy': accuracy,
@@ -392,6 +408,47 @@ def get_model_status():
         'metrics': model_data['metrics'],
         'model_type': model_data['model_type'],
         'hyperparameters': model_data['hyperparameters']
+    }
+
+@app.get('/model/metrics')
+def get_model_metrics(
+        limit: int = Query(default=1, ge=1),
+        model_type: Literal["logreg", "random_forest"] | None = None,
+):
+    try:
+        history = load_training_history()
+    except FileNotFoundError as exc:
+        raise HTTPException(
+            status_code=404,
+            detail="История обучений отсутствует",
+        ) from exc
+
+    if not history:
+        raise HTTPException(
+            status_code=404,
+            detail="История обучений отсутствует",
+        )
+
+    if model_type is not None:
+        history = [
+            record
+            for record in history
+            if record["model_type"] == model_type
+        ]
+
+    if not history:
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                "История обучений для указанного типа модели отсутствует"
+            ),
+        )
+
+    latest_records = history[-limit:][::-1]
+
+    return {
+        "latest_metrics": latest_records[0]["metrics"],
+        "history": latest_records,
     }
 
 @app.get('/model/schema')
