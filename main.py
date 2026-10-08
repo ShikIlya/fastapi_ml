@@ -14,6 +14,11 @@ import logging
 from training_history import save_training_record, load_training_history
 from typing import Literal
 
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+)
+
 logger = logging.getLogger(__name__)
 
 @asynccontextmanager
@@ -194,6 +199,20 @@ async def http_exception_handler(
     request: Request,
     exc: StarletteHTTPException,
 ):
+    log_method = (
+        logger.error
+        if exc.status_code >= 500
+        else logger.warning
+    )
+
+    log_method(
+        "HTTP-ошибка: method=%s path=%s status=%s message=%s",
+        request.method,
+        request.url.path,
+        exc.status_code,
+        exc.detail,
+    )
+
     error = ErrorResponse(
         code=exc.status_code,
         message=str(exc.detail),
@@ -245,6 +264,13 @@ async def validation_exception_handler(
             }
         )
 
+    logger.warning(
+        "Ошибка валидации: method=%s path=%s errors=%s",
+        request.method,
+        request.url.path,
+        errors,
+    )
+
     error = ErrorResponse(
         code=422,
         message="Некорректные данные запроса.",
@@ -258,6 +284,11 @@ async def validation_exception_handler(
 
 @app.post('/predict', responses=PREDICT_ERROR_RESPONSES)
 def predict(payload: list[FeatureVectorChurn]) -> list[PredictionResponseChurn]:
+    logger.info(
+        "Получен запрос /predict: objects=%s",
+        len(payload),
+    )
+
     X = pd.DataFrame([client.model_dump() for client in payload])
 
     model_data = app.state.model_data
@@ -295,6 +326,11 @@ def predict(payload: list[FeatureVectorChurn]) -> list[PredictionResponseChurn]:
             }
         )
 
+    logger.info(
+        "Предсказание churn завершено: results=%s",
+        len(results),
+    )
+
     return results
 
 @app.get('/dataset/preview')
@@ -327,6 +363,12 @@ def split_info():
 
 @app.post('/model/train', responses=TRAIN_ERROR_RESPONSES)
 def model_train(payload: TrainingConfigChurn):
+    logger.info(
+        "Обучение churn начато: model_type=%s hyperparameters=%s",
+        payload.model_type,
+        payload.hyperparameters,
+    )
+
     try:
         df = read_churn_dataset()
     except FileNotFoundError as exc:
@@ -385,6 +427,13 @@ def model_train(payload: TrainingConfigChurn):
     }
 
     save_training_record(record)
+
+    logger.info(
+        "Обучение churn завершено: model_type=%s accuracy=%.4f f1=%.4f",
+        payload.model_type,
+        accuracy,
+        f1,
+    )
 
     return {
         'accuracy': accuracy,
@@ -492,4 +541,19 @@ def get_model_schema():
                 "type": "int"
             }
         ]
+    }
+
+@app.get('/health')
+def get_health():
+    model_available = app.state.model_data is not None
+
+    try:
+        read_churn_dataset()
+        dataset_available = True
+    except (OSError, ValueError, pd.errors.ParserError):
+        dataset_available = False
+
+    return {
+        'model_available': model_available,
+        'dataset_available': dataset_available
     }

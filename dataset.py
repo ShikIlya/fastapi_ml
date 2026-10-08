@@ -6,6 +6,9 @@ from sklearn.compose import ColumnTransformer
 from sklearn.pipeline import Pipeline
 from sklearn.ensemble import RandomForestClassifier
 from schemas import TrainingConfigChurn
+import logging
+
+logger = logging.getLogger(__name__)
 
 NUMERIC_FEATURE_COLUMNS = [
     "monthly_fee",
@@ -36,6 +39,12 @@ def read_churn_dataset():
 
     if df.empty:
         raise ValueError("Датасет не содержит строк данных.")
+
+    logger.info(
+        "Датасет churn загружен: rows=%s columns=%s",
+        len(df),
+        len(df.columns),
+    )
 
     return df
 
