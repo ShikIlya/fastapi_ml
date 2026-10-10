@@ -7,8 +7,8 @@ from dataset import (
     get_amount_rows,
     split_churn_dataset,
     split_info_dataset,
-    train_churn_model,
 )
+from ml.pipeline import train_churn_model
 from schemas import TrainingConfigChurn
 
 
